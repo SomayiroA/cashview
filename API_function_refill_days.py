@@ -1,222 +1,222 @@
-from fastapi import FastAPI, HTTPException, Query
-import pandas as pd
-import holidays
-from pathlib import Path
-from xgboost import XGBRegressor
-from sklearn.ensemble import RandomForestRegressor, StackingRegressor
-from sklearn.linear_model import Ridge, LinearRegression
-from sklearn.model_selection import RandomizedSearchCV, train_test_split
-from scipy.stats import loguniform
-import numpy as np
-import warnings
-from typing import Optional
+# from fastapi import FastAPI, HTTPException, Query
+# import pandas as pd
+# import holidays
+# from pathlib import Path
+# from xgboost import XGBRegressor
+# from sklearn.ensemble import RandomForestRegressor, StackingRegressor
+# from sklearn.linear_model import Ridge, LinearRegression
+# from sklearn.model_selection import RandomizedSearchCV, train_test_split
+# from scipy.stats import loguniform
+# import numpy as np
+# import warnings
+# from typing import Optional
 
-warnings.filterwarnings("ignore")
+# warnings.filterwarnings("ignore")
 
-app = FastAPI()
+# app = FastAPI()
 
-trained_model = None
-model_metadata = {
-    "avg_refill": None,
-    "column_names": None,
-    "max_amount": None
-}
+# trained_model = None
+# model_metadata = {
+#     "avg_refill": None,
+#     "column_names": None,
+#     "max_amount": None
+# }
 
-@app.get("/train-model/")
-async def train_model(
-    csv_path: str = Query(..., description="Path to CSV file (use forward slashes or double backslashes)")
-):
-    global trained_model, model_metadata
+# @app.get("/train-model/")
+# async def train_model(
+#     csv_path: str = Query(..., description="Path to CSV file (use forward slashes or double backslashes)")
+# ):
+#     global trained_model, model_metadata
     
-    try:
-        clean_path = csv_path.strip('\"\'')
-        if not clean_path.lower().endswith('.csv'):
-            clean_path += '.csv'
+#     try:
+#         clean_path = csv_path.strip('\"\'')
+#         if not clean_path.lower().endswith('.csv'):
+#             clean_path += '.csv'
         
-        path = Path(clean_path)
-        if not path.exists():
-            raise HTTPException(status_code=400, detail="File not found")
+#         path = Path(clean_path)
+#         if not path.exists():
+#             raise HTTPException(status_code=400, detail="File not found")
         
-        df = pd.read_csv(path)
-        if df.empty:
-            raise HTTPException(status_code=400, detail="CSV file is empty")
+#         df = pd.read_csv(path)
+#         if df.empty:
+#             raise HTTPException(status_code=400, detail="CSV file is empty")
         
-        headers = df.columns.tolist()
-        if len(headers) < 3:
-            raise HTTPException(status_code=400, detail="CSV needs at least 3 columns")
+#         headers = df.columns.tolist()
+#         if len(headers) < 3:
+#             raise HTTPException(status_code=400, detail="CSV needs at least 3 columns")
         
-        date_col, amount_col, balance_col = headers[0], headers[1], headers[2]
-        model_metadata["column_names"] = {
-            "date": date_col,
-            "amount": amount_col,
-            "balance": balance_col
-        }
+#         date_col, amount_col, balance_col = headers[0], headers[1], headers[2]
+#         model_metadata["column_names"] = {
+#             "date": date_col,
+#             "amount": amount_col,
+#             "balance": balance_col
+#         }
         
-        df[date_col] = pd.to_datetime(df[date_col])
-        df["date"] = df[date_col].dt.date
-        df["day"] = df[date_col].dt.day
-        df["dayofweek"] = df[date_col].dt.dayofweek
-        df["month"] = df[date_col].dt.month
+#         df[date_col] = pd.to_datetime(df[date_col])
+#         df["date"] = df[date_col].dt.date
+#         df["day"] = df[date_col].dt.day
+#         df["dayofweek"] = df[date_col].dt.dayofweek
+#         df["month"] = df[date_col].dt.month
         
-        df2 = df[[amount_col, balance_col, "date", "day", "dayofweek", "month"]].groupby(
-            ["date", "day", "dayofweek", "month"]
-        ).agg({amount_col: "sum", balance_col: "min"}).reset_index()
+#         df2 = df[[amount_col, balance_col, "date", "day", "dayofweek", "month"]].groupby(
+#             ["date", "day", "dayofweek", "month"]
+#         ).agg({amount_col: "sum", balance_col: "min"}).reset_index()
         
-        df2["Month_end"] = df2["day"].apply(lambda x: 1 if x > 27 or x < 3 else 0)
-        df2["is_weekend"] = df2["dayofweek"].apply(lambda x: 1 if x >= 5 else 0)
-        df3 = df2
+#         df2["Month_end"] = df2["day"].apply(lambda x: 1 if x > 27 or x < 3 else 0)
+#         df2["is_weekend"] = df2["dayofweek"].apply(lambda x: 1 if x >= 5 else 0)
+#         df3 = df2
         
-        NGN_holidays = holidays.Nigeria()
-        df3['is_holiday'] = df3['date'].apply(lambda x: 1 if x in NGN_holidays else 0)
-        df3 = df3.drop(columns=["date", "day"])
+#         NGN_holidays = holidays.Nigeria()
+#         df3['is_holiday'] = df3['date'].apply(lambda x: 1 if x in NGN_holidays else 0)
+#         df3 = df3.drop(columns=["date", "day"])
         
-        df3['is_refill'] = df3[balance_col] > df3[balance_col].shift(1)
-        df3['refill_group'] = df3['is_refill'].cumsum()
-        grouped = df3.groupby('refill_group').agg({
-            amount_col: "sum", 
-            "Month_end": "sum", 
-            "is_weekend": "sum", 
-            "is_holiday": "sum",
-            "dayofweek": "sum"
-        }).reset_index()
+#         df3['is_refill'] = df3[balance_col] > df3[balance_col].shift(1)
+#         df3['refill_group'] = df3['is_refill'].cumsum()
+#         grouped = df3.groupby('refill_group').agg({
+#             amount_col: "sum", 
+#             "Month_end": "sum", 
+#             "is_weekend": "sum", 
+#             "is_holiday": "sum",
+#             "dayofweek": "sum"
+#         }).reset_index()
         
-        model_metadata["avg_refill"] = grouped[amount_col].mean()
-        model_metadata["max_amount"] = grouped[amount_col].max()
+#         model_metadata["avg_refill"] = grouped[amount_col].mean()
+#         model_metadata["max_amount"] = grouped[amount_col].max()
         
-        X = df3[["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]]
-        y = df3[amount_col]
-        x_train, x_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.25, shuffle=True, random_state=42
-        )
+#         X = df3[["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]]
+#         y = df3[amount_col]
+#         x_train, x_test, y_train, y_test = train_test_split(
+#             X, y, test_size=0.25, shuffle=True, random_state=42
+#         )
         
-        xgb_param_grid = {
-            'n_estimators': [100, 200, 300, 400, 500],
-            'max_depth': [3, 5, 7, 9],
-            'learning_rate': [0.01, 0.05, 0.1, 0.2],
-            'subsample': [0.6, 0.8, 1.0],
-            'colsample_bytree': [0.6, 0.8, 1.0],
-            'gamma': [0, 0.1, 0.2],
-            'min_child_weight': [1, 3, 5]
-        }
-        xgb = XGBRegressor(random_state=42)
-        xgb_search = RandomizedSearchCV(
-            xgb, xgb_param_grid, n_iter=50, scoring='neg_mean_squared_error',
-            cv=5, verbose=1, random_state=42, n_jobs=-1
-        )
-        xgb_search.fit(x_train, y_train)
-        best_xgb = xgb_search.best_estimator_
+#         xgb_param_grid = {
+#             'n_estimators': [100, 200, 300, 400, 500],
+#             'max_depth': [3, 5, 7, 9],
+#             'learning_rate': [0.01, 0.05, 0.1, 0.2],
+#             'subsample': [0.6, 0.8, 1.0],
+#             'colsample_bytree': [0.6, 0.8, 1.0],
+#             'gamma': [0, 0.1, 0.2],
+#             'min_child_weight': [1, 3, 5]
+#         }
+#         xgb = XGBRegressor(random_state=42)
+#         xgb_search = RandomizedSearchCV(
+#             xgb, xgb_param_grid, n_iter=50, scoring='neg_mean_squared_error',
+#             cv=5, verbose=1, random_state=42, n_jobs=-1
+#         )
+#         xgb_search.fit(x_train, y_train)
+#         best_xgb = xgb_search.best_estimator_
         
-        rf_param_grid = {
-            'n_estimators': [100, 200, 300, 400, 500],
-            'max_depth': [None, 5, 10, 20, 30],
-            'min_samples_split': [2, 5, 10],
-            'min_samples_leaf': [1, 2, 4],
-            'max_features': ['auto', 'sqrt', 'log2'],
-            'bootstrap': [True, False]
-        }
-        rf = RandomForestRegressor(random_state=42)
-        rf_search = RandomizedSearchCV(
-            rf, rf_param_grid, n_iter=50, scoring='neg_mean_squared_error',
-            cv=5, verbose=1, random_state=42, n_jobs=-1
-        )
-        rf_search.fit(x_train, y_train)
-        best_rf = rf_search.best_estimator_
+#         rf_param_grid = {
+#             'n_estimators': [100, 200, 300, 400, 500],
+#             'max_depth': [None, 5, 10, 20, 30],
+#             'min_samples_split': [2, 5, 10],
+#             'min_samples_leaf': [1, 2, 4],
+#             'max_features': ['auto', 'sqrt', 'log2'],
+#             'bootstrap': [True, False]
+#         }
+#         rf = RandomForestRegressor(random_state=42)
+#         rf_search = RandomizedSearchCV(
+#             rf, rf_param_grid, n_iter=50, scoring='neg_mean_squared_error',
+#             cv=5, verbose=1, random_state=42, n_jobs=-1
+#         )
+#         rf_search.fit(x_train, y_train)
+#         best_rf = rf_search.best_estimator_
         
-        ridge_param_grid = {
-            'alpha': loguniform(1e-4, 100),
-            'fit_intercept': [True, False],
-            'solver': ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga'],
-            'max_iter': [100, 500, 1000, 2000],
-            'tol': [1e-4, 1e-3, 1e-2]
-        }
-        ridge = Ridge(random_state=42)
-        ridge_search = RandomizedSearchCV(
-            ridge, ridge_param_grid, n_iter=50, scoring='neg_mean_squared_error',
-            cv=5, verbose=1, random_state=42, n_jobs=-1
-        )
-        ridge_search.fit(x_train, y_train)
-        best_ridge = ridge_search.best_estimator_
+#         ridge_param_grid = {
+#             'alpha': loguniform(1e-4, 100),
+#             'fit_intercept': [True, False],
+#             'solver': ['auto', 'svd', 'cholesky', 'lsqr', 'sparse_cg', 'sag', 'saga'],
+#             'max_iter': [100, 500, 1000, 2000],
+#             'tol': [1e-4, 1e-3, 1e-2]
+#         }
+#         ridge = Ridge(random_state=42)
+#         ridge_search = RandomizedSearchCV(
+#             ridge, ridge_param_grid, n_iter=50, scoring='neg_mean_squared_error',
+#             cv=5, verbose=1, random_state=42, n_jobs=-1
+#         )
+#         ridge_search.fit(x_train, y_train)
+#         best_ridge = ridge_search.best_estimator_
         
-        base_learners = [
-            ("xgb", best_xgb),
-            ("rf", best_rf),
-            ("ridge", best_ridge)
-        ]
-        stacking = StackingRegressor(
-            estimators=base_learners, 
-            final_estimator=LinearRegression()
-        )
-        stacking.fit(X, y)
-        trained_model = stacking
+#         base_learners = [
+#             ("xgb", best_xgb),
+#             ("rf", best_rf),
+#             ("ridge", best_ridge)
+#         ]
+#         stacking = StackingRegressor(
+#             estimators=base_learners, 
+#             final_estimator=LinearRegression()
+#         )
+#         stacking.fit(X, y)
+#         trained_model = stacking
         
-        return {
-            "message": "Model trained successfully",
-            "avg_refill_amount": model_metadata["avg_refill"],
-            "max_daily_amount": model_metadata["max_amount"],
-            "columns_used": model_metadata["column_names"]
-        }
+#         return {
+#             "message": "Model trained successfully",
+#             "avg_refill_amount": model_metadata["avg_refill"],
+#             "max_daily_amount": model_metadata["max_amount"],
+#             "columns_used": model_metadata["column_names"]
+#         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
+#     except Exception as e:
+#         raise HTTPException(status_code=500, detail=f"Training error: {str(e)}")
 
-@app.get("/predict/")
-async def predict(
-    current_date: str = Query(..., description="Current date in YYYY-MM-DD format"),
-    current_amount: float = Query(..., description="Current cash amount in ATM")
-):
-    global trained_model, model_metadata
+# @app.get("/predict/")
+# async def predict(
+#     current_date: str = Query(..., description="Current date in YYYY-MM-DD format"),
+#     current_amount: float = Query(..., description="Current cash amount in ATM")
+# ):
+#     global trained_model, model_metadata
     
-    if not trained_model:
-        raise HTTPException(status_code=400, detail="Model not trained. Please train first.")
+#     if not trained_model:
+#         raise HTTPException(status_code=400, detail="Model not trained. Please train first.")
     
-    try:
-        current_date = pd.to_datetime(current_date)
-        date_range = pd.date_range(start=current_date, periods=365)
-        pred_df = pd.DataFrame({'date': date_range})
+#     try:
+#         current_date = pd.to_datetime(current_date)
+#         date_range = pd.date_range(start=current_date, periods=365)
+#         pred_df = pd.DataFrame({'date': date_range})
         
-        pred_df['day'] = pred_df['date'].dt.day
-        pred_df['month'] = pred_df['date'].dt.month
-        pred_df['dayofweek'] = pred_df['date'].dt.dayofweek
-        pred_df['Month_end'] = pred_df['day'].apply(lambda x: 1 if x > 27 or x < 3 else 0)
-        pred_df['is_weekend'] = pred_df['dayofweek'].apply(lambda x: 1 if x >= 5 else 0)
+#         pred_df['day'] = pred_df['date'].dt.day
+#         pred_df['month'] = pred_df['date'].dt.month
+#         pred_df['dayofweek'] = pred_df['date'].dt.dayofweek
+#         pred_df['Month_end'] = pred_df['day'].apply(lambda x: 1 if x > 27 or x < 3 else 0)
+#         pred_df['is_weekend'] = pred_df['dayofweek'].apply(lambda x: 1 if x >= 5 else 0)
         
-        NGN_holidays = holidays.Nigeria()
-        pred_df['is_holiday'] = pred_df['date'].apply(lambda x: 1 if x in NGN_holidays else 0)
-        pred_df = pred_df.drop(columns=["date", "day"])
+#         NGN_holidays = holidays.Nigeria()
+#         pred_df['is_holiday'] = pred_df['date'].apply(lambda x: 1 if x in NGN_holidays else 0)
+#         pred_df = pred_df.drop(columns=["date", "day"])
         
-        breakdown = []
-        remaining_amount = current_amount
-        depletion_day = None
+#         breakdown = []
+#         remaining_amount = current_amount
+#         depletion_day = None
         
-        for day in range(len(pred_df)):
-            daily_pred = float(trained_model.predict(pred_df.iloc[[day]][["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]])[0])
-            breakdown.append({
-                "day_number": day + 1,
-                "date": date_range[day].strftime('%Y-%m-%d'),
-                "predicted_withdrawal": daily_pred,
-                "remaining_balance": remaining_amount - daily_pred
-            })
-            remaining_amount -= daily_pred
+#         for day in range(len(pred_df)):
+#             daily_pred = float(trained_model.predict(pred_df.iloc[[day]][["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]])[0])
+#             breakdown.append({
+#                 "day_number": day + 1,
+#                 "date": date_range[day].strftime('%Y-%m-%d'),
+#                 "predicted_withdrawal": daily_pred,
+#                 "remaining_balance": remaining_amount - daily_pred
+#             })
+#             remaining_amount -= daily_pred
             
-            if remaining_amount < 1:
-                depletion_day = day + 1  # +1 because days start at 1
-                break
+#             if remaining_amount < 1:
+#                 depletion_day = day + 1  # +1 because days start at 1
+#                 break
         
-        if depletion_day is None:
-            raise HTTPException(status_code=400, detail="Prediction horizon too short")
+#         if depletion_day is None:
+#             raise HTTPException(status_code=400, detail="Prediction horizon too short")
         
-        return {
-            "depletion_day": depletion_day,
-            "message": f"ATM will run out of cash in approximately {depletion_day} days",
-            "daily_breakdown": breakdown[:depletion_day],  # Only include days until depletion
-            "prediction_date": current_date.strftime('%Y-%m-%d'),
-            "initial_amount": current_amount,
-            "total_predicted_withdrawal": sum(item["predicted_withdrawal"] for item in breakdown[:depletion_day])
-        }
+#         return {
+#             "depletion_day": depletion_day,
+#             "message": f"ATM will run out of cash in approximately {depletion_day} days",
+#             "daily_breakdown": breakdown[:depletion_day],  # Only include days until depletion
+#             "prediction_date": current_date.strftime('%Y-%m-%d'),
+#             "initial_amount": current_amount,
+#             "total_predicted_withdrawal": sum(item["predicted_withdrawal"] for item in breakdown[:depletion_day])
+#         }
         
-    except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}")
+#     except Exception as e:
+#         raise HTTPException(status_code=400, detail=f"Prediction error: {str(e)}")
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app)
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app)
