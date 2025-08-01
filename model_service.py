@@ -40,8 +40,9 @@ class ModelService:
         df["day"] = df[date_col].dt.day
         df["dayofweek"] = df[date_col].dt.dayofweek
         df["month"] = df[date_col].dt.month
-        df2 = df[[amount_col, balance_col, "date", "day", "dayofweek", "month"]].groupby(
-            ["date", "day", "dayofweek", "month"]
+        df["year"] = df[date_col].dt.year
+        df2 = df[[amount_col, balance_col, "date", "year", "day", "dayofweek", "month"]].groupby(
+            ["date", "year", "month", "day", "dayofweek"]
         ).agg({amount_col: "sum", balance_col: "min"}).reset_index()
         df2["Month_end"] = df2["day"].apply(lambda x: 1 if x > 27 or x < 3 else 0)
         df2["is_weekend"] = df2["dayofweek"].apply(lambda x: 1 if x >= 5 else 0)
@@ -56,12 +57,13 @@ class ModelService:
             "Month_end": "sum",
             "is_weekend": "sum",
             "is_holiday": "sum",
-            "dayofweek": "sum"
+            "dayofweek": "sum",
+            "year": "sum"
         }).reset_index()
         self.model_metadata["max_refill"] = grouped[amount_col].max()
         df4 = df3[df3[balance_col] != 0]
-        df5 = df4[[amount_col, "Month_end", "is_weekend", "is_holiday", "month", "dayofweek"]]
-        X = df5[["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]]
+        df5 = df4[[amount_col, "Month_end", "is_weekend", "is_holiday", "month", "dayofweek", "year"]]
+        X = df5[["month", "Month_end", "is_weekend", "is_holiday", "dayofweek", "year"]]
         y = df5[amount_col]
         x_train, x_test, y_train, y_test = train_test_split(
             X, y, test_size=0.25, shuffle=True, random_state=42
@@ -136,6 +138,7 @@ class ModelService:
         pred_df = pd.DataFrame({'date': date_range})
         pred_df['day'] = pred_df['date'].dt.day
         pred_df['month'] = pred_df['date'].dt.month
+        pred_df['year'] = pred_df['date'].dt.year
         pred_df['dayofweek'] = pred_df['date'].dt.dayofweek
         pred_df['Month_end'] = pred_df['day'].apply(lambda x: 1 if x > 27 or x < 3 else 0)
         pred_df['is_weekend'] = pred_df['dayofweek'].apply(lambda x: 1 if x >= 5 else 0)
@@ -145,7 +148,7 @@ class ModelService:
         predictions = []
         total = 0
         for day in range(days):
-            daily_pred = float(self.trained_model.predict(pred_df.iloc[[day]][["month", "Month_end", "is_weekend", "is_holiday", "dayofweek"]])[0])
+            daily_pred = float(self.trained_model.predict(pred_df.iloc[[day]][["month", "Month_end", "is_weekend", "is_holiday", "dayofweek", "year"]])[0])
             total += daily_pred
             predictions.append({
                 "day_number": day + 1,
